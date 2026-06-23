@@ -100,28 +100,35 @@ Prints the five validation scenarios to the console with PASS/FAIL status.
 tax-regime-optimizer/
 ├── .streamlit/
 │   └── config.toml          # Brand theme (Sea Green, Tahoma)
+├── data/
+│   └── salary_master.csv    # Bundled synthetic demo data (50 employees)
 ├── tests/
 │   └── test_engine.py       # Pytest unit tests
 ├── app.py                   # Streamlit UI
+├── breakeven.py             # CTC sweep helper for the breakeven chart
 ├── regime_engine.py         # Tax engine (import this for custom use)
 ├── pdf_report.py            # ReportLab one-page PDF
 ├── requirements.txt
 └── README.md
 ```
 
-Salary data lives at `../synthetic-data/output/salary_master.csv`.
+The 50 demo employees are loaded from the bundled `data/salary_master.csv`,
+which ships inside this repo so the demo picker works on Streamlit Community
+Cloud (single-repo deploy). `app.py` resolves it with a `__file__`-relative
+path, so it loads regardless of the working directory.
 
 ---
 
 ## Data note
 
 All 50 demo employees are **synthetic** — invented names, PANs, and salary
-figures.  No real employee data is used.  Re-generate the data at any time:
+figures.  No real employee data is used.  The data ships in this repo at
+`data/salary_master.csv`.
 
-```powershell
-cd "..\synthetic-data"
-python gen_salary_slips.py
-```
+To regenerate it from the synthetic-data generators (kept in the separate
+[`synthetic-finance-data`](https://github.com/AnujSureshkumar/synthetic-finance-data)
+repo), run `python gen_salary_slips.py` there and copy the refreshed
+`salary_master.csv` into this repo's `data/` folder.
 
 ---
 

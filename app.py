@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from breakeven import build_sweep
 from pdf_report import generate_pdf
 from regime_engine import TaxParams, TaxResult, compute, params_from_csv_row
 
@@ -25,7 +26,7 @@ st.set_page_config(
     page_title="Tax Regime Optimiser — Tax Year 2026-27",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -38,6 +39,14 @@ st.markdown(
     h2 { color: #2A8676; }
     .stButton>button { background-color: #4DBBAE; color: white; border: none; }
     .stButton>button:hover { background-color: #2A8676; color: white; }
+    /* Tabbed form — active tab text + underline on the ramp (Deep Sea Green) */
+    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] { color: #2A8676; }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: #2A8676; }
+    /* Primary "Compute comparison" submit button — Deep Sea Green per design */
+    .stFormSubmitButton>button {
+        background-color: #2A8676; color: white; border: none; font-weight: bold;
+    }
+    .stFormSubmitButton>button:hover { background-color: #4DBBAE; color: white; }
     .winner-box {
         background: #4DBBAE; color: white; border-radius: 6px;
         padding: 14px 20px; text-align: center; font-size: 1.1rem; font-weight: bold;
@@ -95,17 +104,17 @@ def _inr(n: float) -> str:
     return ("Rs " if n >= 0 else "-Rs ") + g
 
 
-# ---------------------------------------------------------------------------
-# Sidebar: input mode
-# ---------------------------------------------------------------------------
-st.sidebar.title("Tax Regime Optimiser")
-st.sidebar.caption("Tax Year 2026-27  ·  Income Tax Act 2025")
-
-mode = st.sidebar.radio(
-    "Input mode",
-    ["Pick a demo employee", "Enter my own details"],
-    help="Demo employees are synthetic / non-real."
+# A quiet sidebar note (the inputs now live on the main page).
+st.sidebar.caption(
+    "Tax Regime Optimiser · Tax Year 2026-27 · synthetic demo data · "
+    "built by Anuj Sureshkumar."
 )
+
+# ---------------------------------------------------------------------------
+# Page header
+# ---------------------------------------------------------------------------
+st.title("Tax Regime Optimiser")
+st.caption("Tax Year 2026-27  ·  Income Tax Act 2025  ·  Old vs New regime comparison")
 
 df = load_salary_master()
 
@@ -113,13 +122,39 @@ params: TaxParams | None = None
 employee_name = "Employee"
 
 # ---------------------------------------------------------------------------
-# Mode A: Demo employee picker
+# Input-mode toggle (top of the main page, above the form)
 # ---------------------------------------------------------------------------
-if mode == "Pick a demo employee":
-    st.sidebar.markdown(
+MODE_DEMO = "Demo employee"
+MODE_MANUAL = "Enter my own details"
+
+st.markdown("**Input mode**")
+if hasattr(st, "segmented_control"):
+    mode = st.segmented_control(
+        "Input mode",
+        [MODE_DEMO, MODE_MANUAL],
+        default=MODE_DEMO,
+        label_visibility="collapsed",
+        key="input_mode",
+    )
+else:  # fallback for older Streamlit
+    mode = st.radio(
+        "Input mode", [MODE_DEMO, MODE_MANUAL],
+        horizontal=True, label_visibility="collapsed",
+        key="input_mode",
+    )
+# segmented_control returns None if the user clicks the active chip to clear it
+if mode is None:
+    mode = MODE_DEMO
+st.caption("Demo loads a sample employee. Enter your own to compute on your figures.")
+
+# ---------------------------------------------------------------------------
+# Mode A: Demo employee picker (main page)
+# ---------------------------------------------------------------------------
+if mode == MODE_DEMO:
+    st.markdown(
         """
         <div style="background:#E1EFEC;border-radius:4px;padding:8px 10px;
-        font-size:0.8rem;color:#6B7570;margin-top:6px;">
+        font-size:0.8rem;color:#6B7570;margin:6px 0;">
         <strong>Synthetic demo data</strong> — 50 non-real employees of a
         fictional ITeS company. Names, PANs and figures are invented.
         </div>
@@ -128,20 +163,22 @@ if mode == "Pick a demo employee":
     )
 
     if df.empty:
-        st.sidebar.error("salary_master.csv not found.  Expected at data/salary_master.csv")
+        st.error("salary_master.csv not found.  Expected at data/salary_master.csv")
     else:
         options = [
             f"{row['emp_id']} — {row['name']} ({row['designation']}, CTC {_inr(row['gross_ctc'])})"
             for _, row in df.iterrows()
         ]
-        selected_idx = st.sidebar.selectbox(
-            "Select employee", range(len(options)), format_func=lambda i: options[i]
-        )
+        pick_col, _ = st.columns([2, 1])
+        with pick_col:
+            selected_idx = st.selectbox(
+                "Select employee", range(len(options)), format_func=lambda i: options[i]
+            )
         row = df.iloc[selected_idx]
         employee_name = row["name"]
         params = params_from_csv_row(row)
 
-        with st.sidebar.expander("Raw declaration data (from salary_master)"):
+        with st.expander("Raw declaration data (from salary_master)"):
             display_cols = [
                 "emp_id", "gross_ctc", "basic", "hra_component", "metro",
                 "rent_paid_annual", "employee_pf_80c", "decl_80c_other",
@@ -152,61 +189,133 @@ if mode == "Pick a demo employee":
             st.dataframe(row[display_cols].to_frame().T, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Mode B: Manual entry
+# Mode B: Manual entry — tabbed form on the main page
 # ---------------------------------------------------------------------------
+# One st.form, one submit button. Tabs group the fields; columns lay them out.
+# Field names, defaults, help text and the TaxParams mapping are unchanged from
+# the sidebar version — this is a layout move only.
 else:
-    st.sidebar.subheader("Salary components (annual, Rs)")
-    gross_ctc    = st.sidebar.number_input("Gross CTC", value=15_00_000, step=10_000, min_value=1_00_000)
-    basic        = st.sidebar.number_input("Basic salary", value=int(gross_ctc * 0.45), step=5_000)
-    hra_comp     = st.sidebar.number_input("HRA component", value=int(basic * 0.50), step=5_000)
-    employer_pf  = st.sidebar.number_input("Employer PF (annual)", value=21_600, step=1_000)
-    gratuity     = st.sidebar.number_input("Gratuity provision (annual)", value=int(basic * 0.0481), step=1_000)
-    metro        = st.sidebar.checkbox("Metro city (50% basic for HRA)", value=True)
-    rent_paid    = st.sidebar.number_input("Rent paid (annual, 0 if not claiming HRA)", value=0, step=5_000)
+    with st.form("manual_entry"):
+        tab_salary, tab_deductions, tab_details = st.tabs(
+            ["Salary structure", "Old-regime deductions", "Your details"]
+        )
 
-    st.sidebar.subheader("Old-regime deductions")
-    emp_pf       = st.sidebar.number_input("Employee PF (80C pool)", value=21_600, step=1_000,
-                                           help="Sec 123 — contributes to Rs 1.5L cap")
-    other_80c    = st.sidebar.number_input("Other 80C (PPF, ELSS, LIC, etc.)", value=0, step=5_000,
-                                           help="Sec 123 — combined cap Rs 1.5L with employee PF")
-    d_80d_self   = st.sidebar.number_input("80D medical — self & family (cap Rs 25k)", value=0, step=1_000)
-    d_80d_par    = st.sidebar.number_input("80D medical — parents (cap Rs 50k)", value=0, step=1_000)
-    d_ccd1b      = st.sidebar.number_input("80CCD(1B) employee NPS (cap Rs 50k)", value=0, step=5_000)
-    d_80e        = st.sidebar.number_input("80E education loan interest (no cap)", value=0, step=5_000)
-    d_24b        = st.sidebar.number_input("Sec 24(b) home loan interest (cap Rs 2L)", value=0, step=10_000)
-    emp_nps      = st.sidebar.number_input("Employer NPS / 80CCD(2) (Sec 124)", value=0, step=5_000,
-                                           help="Cap: 10% basic (old regime) / 14% basic (new regime)")
-    pt           = st.sidebar.number_input("Professional tax (old regime only)", value=2_400, step=100)
+        # --- Tab 1: Salary structure ---
+        with tab_salary:
+            left, right = st.columns(2)
+            with left:
+                gross_ctc = st.number_input(
+                    "Gross CTC", value=15_00_000, step=10_000, min_value=1_00_000,
+                    help="Total cost to company for the year, before any deductions.")
+                basic = st.number_input(
+                    "Basic salary", value=int(gross_ctc * 0.45), step=5_000,
+                    help="Annual basic pay. Drives PF, gratuity and the HRA exemption.")
+                hra_comp = st.number_input(
+                    "HRA component", value=int(basic * 0.50), step=5_000,
+                    help="House rent allowance shown in your salary structure (annual).")
+                metro = st.checkbox(
+                    "Metro city?", value=True,
+                    help="Tick if you live in a metro. 50% of basic is used for the "
+                         "HRA exemption, otherwise 40%.")
+            with right:
+                employer_pf = st.number_input(
+                    "Employer PF (annual)", value=21_600, step=1_000,
+                    help="Employer's provident fund contribution for the year.")
+                gratuity = st.number_input(
+                    "Gratuity provision (annual)", value=int(basic * 0.0481), step=1_000,
+                    help="Gratuity set aside by your employer this year.")
+                rent_paid = st.number_input(
+                    "Rent paid (annual)", value=0, step=5_000,
+                    help="Total rent paid for the year. Enter 0 if you are not claiming HRA.")
 
-    employee_name = st.sidebar.text_input("Your name (for PDF)", value="Employee")
+        # --- Tab 2: Old-regime deductions ---
+        with tab_deductions:
+            left, right = st.columns(2)
+            with left:
+                emp_pf = st.number_input(
+                    "Employee PF", value=21_600, step=1_000,
+                    help="Your provident fund contribution. Counts towards the 80C pool (Section 123).")
+                other_80c = st.number_input(
+                    "Other 80C (PPF / ELSS / LIC)", value=0, step=5_000,
+                    help="Other 80C investments such as PPF, ELSS or LIC (Section 123).")
+                d_ccd1b = st.number_input(
+                    "80CCD(1B) NPS", value=0, step=5_000,
+                    help="Additional NPS contribution. Capped at 50,000.")
+                emp_nps = st.number_input(
+                    "Employer NPS / 80CCD(2)", value=0, step=5_000,
+                    help="Employer's NPS contribution (Section 124). Allowed under both regimes.")
+            with right:
+                d_80d_self = st.number_input(
+                    "80D self & family", value=0, step=1_000,
+                    help="Health insurance premium for self and family. Capped at 25,000.")
+                d_80d_par = st.number_input(
+                    "80D parents", value=0, step=1_000,
+                    help="Health insurance premium for parents. Capped at 50,000.")
+                d_24b = st.number_input(
+                    "Sec 24(b) home-loan interest", value=0, step=10_000,
+                    help="Interest on a self-occupied home loan. Capped at 2,00,000.")
+                d_80e = st.number_input(
+                    "80E education-loan interest", value=0, step=5_000,
+                    help="Interest paid on an education loan. No upper limit.")
+                pt = st.number_input(
+                    "Professional tax", value=2_400, step=100,
+                    help="Professional tax deducted by your employer during the year.")
 
-    params = TaxParams(
-        gross_ctc       = float(gross_ctc),
-        basic           = float(basic),
-        hra_component   = float(hra_comp),
-        employer_pf     = float(employer_pf),
-        gratuity        = float(gratuity),
-        rent_paid       = float(rent_paid),
-        metro           = metro,
-        employee_pf_80c = float(emp_pf),
-        decl_80c_other  = float(other_80c),
-        decl_80d_self   = float(d_80d_self),
-        decl_80d_parents= float(d_80d_par),
-        decl_80ccd_1b_nps= float(d_ccd1b),
-        decl_80e_edu    = float(d_80e),
-        decl_24b_home   = float(d_24b),
-        employer_nps    = float(emp_nps),
-        professional_tax= float(pt),
-    )
+        # --- Tab 3: Your details ---
+        with tab_details:
+            left, right = st.columns(2)
+            with left:
+                name_input = st.text_input(
+                    "Name", value="Employee",
+                    help="Used to label the downloadable PDF report.")
+            with right:
+                st.info(
+                    "These details are used only to compute and label your comparison. "
+                    "Old-regime deductions apply only when you choose the old regime; "
+                    "the new regime ignores them. Nothing is saved after you close the app."
+                )
+
+        # Single submit button — inside the form but outside the tabs, so it
+        # stays visible whichever tab is active.
+        submitted = st.form_submit_button(
+            "Compute comparison", type="primary", use_container_width=True
+        )
+
+    if submitted:
+        st.session_state["manual_submitted"] = True
+
+    # Render results once the form has been submitted at least once. The form
+    # widgets keep their committed values across reruns (e.g. a PDF download),
+    # so we can rebuild params from them each run.
+    if st.session_state.get("manual_submitted"):
+        employee_name = name_input.strip() or "Employee"
+        params = TaxParams(
+            gross_ctc       = float(gross_ctc),
+            basic           = float(basic),
+            hra_component   = float(hra_comp),
+            employer_pf     = float(employer_pf),
+            gratuity        = float(gratuity),
+            rent_paid       = float(rent_paid),
+            metro           = metro,
+            employee_pf_80c = float(emp_pf),
+            decl_80c_other  = float(other_80c),
+            decl_80d_self   = float(d_80d_self),
+            decl_80d_parents= float(d_80d_par),
+            decl_80ccd_1b_nps= float(d_ccd1b),
+            decl_80e_edu    = float(d_80e),
+            decl_24b_home   = float(d_24b),
+            employer_nps    = float(emp_nps),
+            professional_tax= float(pt),
+        )
 
 # ---------------------------------------------------------------------------
 # Compute and display results
 # ---------------------------------------------------------------------------
-st.title("Tax Regime Optimiser")
-st.caption("Tax Year 2026-27  ·  Income Tax Act 2025  ·  Old vs New regime comparison")
-
 if params is None:
-    st.info("Select an input mode and fill in the details to see your comparison.")
+    if mode == MODE_MANUAL:
+        st.info("Fill in the tabs above and press **Compute comparison** to see your result.")
+    else:
+        st.info("Select an input mode and fill in the details to see your comparison.")
     st.stop()
 
 result: TaxResult = compute(params)
@@ -273,51 +382,32 @@ _regime_card(col_new, result.new, result.winner == "new")
 # ---------------------------------------------------------------------------
 st.subheader("Breakeven analysis")
 st.caption(
-    "How total tax changes with gross CTC — shows the crossover point where regimes switch."
+    "How total tax changes with gross CTC. The sweep holds this person's "
+    "deductions and rent fixed at their actual rupee values while only the "
+    "salary structure (basic, HRA, employer PF and gratuity) scales with CTC — "
+    "so the curve shows a clean, slab-driven breakeven rather than a runaway "
+    "HRA exemption."
 )
 
-# Build CTC range around the current value
+# Build a CTC range around the current value, then sweep with deductions held
+# fixed (see breakeven.py for why fixing rent + deductions removes the spurious
+# old-regime advantage at high CTC).
 base_ctc = params.gross_ctc
 ctc_min  = max(3_00_000, int(base_ctc * 0.5))
 ctc_max  = int(base_ctc * 2.0)
 step_size = max(50_000, int((ctc_max - ctc_min) / 50))
-ctc_range = list(range(ctc_min, ctc_max + step_size, step_size))
 
-old_taxes, new_taxes = [], []
-
-for ctc_val in ctc_range:
-    # Scale components proportionally
-    scale = ctc_val / base_ctc
-    p_scaled = TaxParams(
-        gross_ctc       = float(ctc_val),
-        basic           = round(params.basic * scale),
-        hra_component   = round(params.hra_component * scale),
-        employer_pf     = round(params.employer_pf * scale),
-        gratuity        = round(params.gratuity * scale),
-        rent_paid       = round(params.rent_paid * scale),
-        metro           = params.metro,
-        employee_pf_80c = round(params.employee_pf_80c * scale),
-        decl_80c_other  = round(params.decl_80c_other * scale),
-        decl_80d_self   = params.decl_80d_self,
-        decl_80d_parents= params.decl_80d_parents,
-        decl_80ccd_1b_nps= round(params.decl_80ccd_1b_nps * scale),
-        decl_80e_edu    = round(params.decl_80e_edu * scale),
-        decl_24b_home   = params.decl_24b_home,
-        employer_nps    = round(params.employer_nps * scale),
-        professional_tax= params.professional_tax,
-    )
-    r_scaled = compute(p_scaled)
-    old_taxes.append(r_scaled.old.total_tax)
-    new_taxes.append(r_scaled.new.total_tax)
+sweep = build_sweep(params, ctc_min, ctc_max, step_size)
+ctc_range = sweep.ctcs
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(
-    x=[c / 1_00_000 for c in ctc_range], y=[t / 1_00_000 for t in old_taxes],
+    x=[c / 1_00_000 for c in ctc_range], y=[t / 1_00_000 for t in sweep.old_taxes],
     name="Old Regime", mode="lines",
     line=dict(color="#F4C9B6", width=2),
 ))
 fig.add_trace(go.Scatter(
-    x=[c / 1_00_000 for c in ctc_range], y=[t / 1_00_000 for t in new_taxes],
+    x=[c / 1_00_000 for c in ctc_range], y=[t / 1_00_000 for t in sweep.new_taxes],
     name="New Regime", mode="lines",
     line=dict(color="#4DBBAE", width=2),
 ))
@@ -329,6 +419,31 @@ fig.add_vline(
     annotation_position="top right",
     annotation_font_size=10,
 )
+# Annotate the crossover, if the regimes actually swap within the range.
+if sweep.crossover_ctc is not None:
+    fig.add_trace(go.Scatter(
+        x=[sweep.crossover_ctc / 1_00_000], y=[sweep.crossover_tax / 1_00_000],
+        name="Breakeven", mode="markers",
+        marker=dict(color="#2A8676", size=10, symbol="circle-open", line=dict(width=2)),
+        hovertemplate=f"Breakeven ~{_inr(sweep.crossover_ctc)}<extra></extra>",
+        showlegend=False,
+    ))
+    fig.add_annotation(
+        x=sweep.crossover_ctc / 1_00_000, y=sweep.crossover_tax / 1_00_000,
+        text=f"Breakeven ~{_inr(sweep.crossover_ctc)}",
+        showarrow=True, arrowhead=2, arrowcolor="#2A8676",
+        ax=0, ay=-34, font=dict(size=10, color="#2A8676"),
+    )
+    st.caption(
+        f"At this person's fixed deductions, the regimes break even around a "
+        f"gross CTC of **{_inr(sweep.crossover_ctc)}**. Below it one regime wins; "
+        f"above it the other does."
+    )
+else:
+    st.caption(
+        "Across this CTC range the same regime stays cheaper throughout — the "
+        "lines do not cross."
+    )
 
 fig.update_layout(
     font=dict(family="Tahoma, Verdana, sans-serif", color="#2E3A36", size=12),
