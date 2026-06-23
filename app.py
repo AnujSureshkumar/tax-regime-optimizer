@@ -266,7 +266,7 @@ else:
             left, right = st.columns(2)
             with left:
                 name_input = st.text_input(
-                    "Name", value="Employee",
+                    "Name", value="", placeholder="Your name",
                     help="Used to label the downloadable PDF report.")
             with right:
                 st.info(
