@@ -47,6 +47,18 @@ st.markdown(
         background-color: #2A8676; color: white; border: none; font-weight: bold;
     }
     .stFormSubmitButton>button:hover { background-color: #4DBBAE; color: white; }
+    /* "About this prototype" expander header — bold and slightly larger on the
+       ramp (Deep Sea Green). Streamlit-internal selector; verify in the running
+       app and adjust if the DOM differs. */
+    [data-testid="stExpander"] summary p {
+        font-weight: 700; font-size: 1.05rem; color: #2A8676;
+    }
+    /* Persistent disclaimer line — hairline top+bottom border on Wash. */
+    .persistent-disclaimer {
+        border-top: 1px solid #B5E2D9; border-bottom: 1px solid #B5E2D9;
+        background: #E1EFEC; padding: 6px 10px; margin: 6px 0 10px 0;
+        font-size: 0.78rem; color: #2A8676;
+    }
     .winner-box {
         background: #4DBBAE; color: white; border-radius: 6px;
         padding: 14px 20px; text-align: center; font-size: 1.1rem; font-weight: bold;
@@ -60,10 +72,6 @@ st.markdown(
     .winner-regime {
         background: #B5E2D9; border-left: 4px solid #4DBBAE;
         border-radius: 4px; padding: 12px 16px;
-    }
-    .disclaimer-box {
-        background: #E1EFEC; border-left: 4px solid #2A8676;
-        border-radius: 4px; padding: 10px 14px; font-size: 0.8rem; color: #6B7570;
     }
     </style>
     """,
@@ -115,6 +123,35 @@ st.sidebar.caption(
 # ---------------------------------------------------------------------------
 st.title("Tax Regime Optimiser")
 st.caption("Tax Year 2026-27  ·  Income Tax Act 2025  ·  Old vs New regime comparison")
+
+# Persistent disclaimer line — always visible, directly under the caption.
+st.markdown(
+    '<div class="persistent-disclaimer">Not tax advice  ·  synthetic demo data  ·  '
+    'verify with a CA before submitting Form 124</div>',
+    unsafe_allow_html=True,
+)
+
+# About this prototype — open by default, collapsible.
+with st.expander("About this prototype", expanded=True):
+    st.markdown(
+        "A working prototype, built by a Finance Controller to show what a strong "
+        "internal finance tool can look like."
+    )
+    st.markdown(
+        "The tax engine is real. For Tax Year 2026-27 under the Income Tax Act, 2025, "
+        "it computes the slabs, the surcharge with marginal relief, and the Section 156 "
+        "rebate (formerly Section 87A) correctly."
+    )
+    st.markdown(
+        "The salary structure is synthetic. It models the pay structure of a fictional "
+        "IT company. A real CTC usually has components this demo does not cover, such as "
+        "reimbursable allowances, meal allowance and employer NPS. So entering your gross "
+        "CTC will not reproduce your actual break-up, and the tax will not match either."
+    )
+    st.markdown(
+        "This is not tax advice. Verify your regime choice with a Chartered Accountant "
+        "before submitting Form 124, which replaces Form 12BB from 1 April 2026."
+    )
 
 df = load_salary_master()
 
@@ -473,20 +510,4 @@ st.download_button(
     data=pdf_bytes,
     file_name=f"tax-advisory-{employee_name.replace(' ', '-').lower()}-2026-27.pdf",
     mime="application/pdf",
-)
-
-# ---------------------------------------------------------------------------
-# Disclaimer
-# ---------------------------------------------------------------------------
-st.markdown(
-    """
-    <div class="disclaimer-box">
-    <strong>Disclaimer</strong> — This tool uses synthetic, non-real employee data for
-    demonstration purposes only. It does not constitute tax advice. Tax liability depends
-    on individual circumstances, age, other income sources, and final declarations. Verify
-    your regime choice with a Chartered Accountant or tax professional before submitting
-    Form 12BB. Built by <a href="https://anujsureshkumar.com">Anuj Sureshkumar</a>.
-    </div>
-    """,
-    unsafe_allow_html=True,
 )

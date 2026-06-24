@@ -14,7 +14,7 @@ Built by [Anuj Sureshkumar](https://anujsureshkumar.com) as part of the
 - Computes income tax under **both regimes** (Tax Year 2026-27, IT Act 2025):
   old-regime slabs (2.5/5/20/30%) and new-regime slabs (0/5/10/15/20/25/30%).
 - Applies **surcharge with marginal relief** at all thresholds (Rs 50L, 1Cr, 2Cr, 5Cr).
-- Applies **Sec 156 rebate** (formerly 87A): new regime up to Rs 60k when taxable
+- Applies **Section 156 (formerly 87A)** rebate: new regime up to Rs 60k when taxable
   income is Rs 12L or below; old regime up to Rs 12.5k when taxable is Rs 5L or below.
 - Applies **new-regime rebate marginal relief** at the Rs 12L boundary so tax grows
   smoothly above it.
@@ -145,7 +145,7 @@ repo), run `python gen_salary_slips.py` there and copy the refreshed
 | Education loan | Sec 129 | No cap | No |
 | Home loan interest | Sec 24(b) | Cap Rs 2L | No |
 | Professional tax | — | Rs 2,400 | No (company policy) |
-| Rebate | Sec 156 (old: 87A) | Up to Rs 12.5k if taxable <= 5L | Up to Rs 60k if taxable <= 12L |
+| Rebate | Section 156 (formerly 87A) | Up to Rs 12.5k if taxable <= 5L | Up to Rs 60k if taxable <= 12L |
 | Surcharge cap | — | 10/15/25/37% | 10/15/25/25% (capped at 25%) |
 
 ---

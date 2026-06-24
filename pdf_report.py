@@ -302,7 +302,7 @@ def generate_pdf(
     c.setFont(_FONT_REGULAR, 7.5)
     c.setFillColor(SLATE_INK)
     c.drawString(margin + 70, y_break - 8,
-                 "The recommended regime has lower total tax.  Verify with a CA before submitting Form 12BB.")
+                 "The recommended regime has lower total tax.  Verify with a CA before submitting Form 124.")
 
     # --- Disclaimer box (must be visible without scrolling) ---
     disc_y = 8 * mm
