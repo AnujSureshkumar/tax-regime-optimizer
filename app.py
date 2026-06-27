@@ -16,8 +16,34 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from breakeven import build_sweep
-from pdf_report import generate_pdf
+from pdf_report import generate_pdf, render_sweep_chart_png
 from regime_engine import TaxParams, TaxResult, compute, params_from_csv_row
+
+
+def _round_to(value: float, base: int = 100) -> int:
+    """Round to the nearest `base`. Mirrors the synthetic-data generator's
+    round_to (gen_salary_slips.py / common.py) so manually entered CTCs derive
+    the same salary structure as the demo data."""
+    return int(round(value / base) * base)
+
+
+def _derive_components(ctc: float) -> dict:
+    """Derive the salary structure from Gross CTC using the demo company's
+    standard structure (same deterministic formulas as the generator's
+    build_employee). Returns basic, hra_component, employer_pf, gratuity and
+    employee_pf (the mirrored employer PF that feeds the 80C / Sec 123 pool)."""
+    basic = _round_to(0.45 * ctc, 100)
+    hra_component = _round_to(0.50 * basic, 100)
+    employer_pf = min(_round_to(0.12 * basic, 12), 21_600)
+    gratuity = _round_to(0.0481 * basic, 1)
+    employee_pf = employer_pf  # mirror the employer cap; feeds the 80C pool
+    return {
+        "basic": basic,
+        "hra_component": hra_component,
+        "employer_pf": employer_pf,
+        "gratuity": gratuity,
+        "employee_pf": employee_pf,
+    }
 
 # ---------------------------------------------------------------------------
 # Page config and brand CSS injection
@@ -145,7 +171,7 @@ with st.expander("About this prototype", expanded=True):
     st.markdown(
         "The salary structure is synthetic. It models the pay structure of a fictional "
         "IT company. A real CTC usually has components this demo does not cover, such as "
-        "reimbursable allowances, meal allowance and employer NPS. So entering your gross "
+        "reimbursable allowances and meal allowance. So entering your gross "
         "CTC will not reproduce your actual break-up, and the tax will not match either."
     )
     st.markdown(
@@ -226,94 +252,96 @@ if mode == MODE_DEMO:
             st.dataframe(row[display_cols].to_frame().T, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Mode B: Manual entry — tabbed form on the main page
+# Mode B: Manual entry — single scrolling form on the main page
 # ---------------------------------------------------------------------------
-# One st.form, one submit button. Tabs group the fields; columns lay them out.
-# Field names, defaults, help text and the TaxParams mapping are unchanged from
-# the sidebar version — this is a layout move only.
+# One st.form, three labelled sections stacked vertically, submit at the very
+# bottom so the user scrolls past every section. The salary structure is
+# DERIVED from Gross CTC using the demo company's standard structure (so an
+# impossible basic/HRA cannot be entered); only metro and rent stay user inputs.
 else:
     with st.form("manual_entry"):
-        tab_salary, tab_deductions, tab_details = st.tabs(
-            ["Salary structure", "Old-regime deductions", "Your details"]
+        # --- Section 1: Salary structure ---
+        st.subheader("Salary structure")
+        left, right = st.columns(2)
+        with left:
+            gross_ctc = st.number_input(
+                "Gross CTC", value=15_00_000, step=10_000, min_value=1_00_000,
+                help="Total cost to company for the year, before any deductions.")
+            metro = st.checkbox(
+                "Metro city?", value=True,
+                help="Tick if you live in a metro. 50% of basic is used for the "
+                     "HRA exemption, otherwise 40%.")
+        with right:
+            rent_paid = st.number_input(
+                "Rent paid (annual)", value=0, step=5_000,
+                help="Total rent paid for the year. Enter 0 if you are not claiming HRA.")
+
+        # Derive the salary structure from CTC (same formulas as the generator).
+        comp = _derive_components(gross_ctc)
+        basic        = comp["basic"]
+        hra_comp     = comp["hra_component"]
+        employer_pf  = comp["employer_pf"]
+        gratuity     = comp["gratuity"]
+        emp_pf       = comp["employee_pf"]
+        gross_taxable = gross_ctc - employer_pf - gratuity
+
+        st.caption(
+            "Components are derived from CTC using the demo company's standard "
+            "salary structure."
+        )
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Basic", _inr(basic))
+        m2.metric("HRA component", _inr(hra_comp))
+        m3.metric("Employer PF", _inr(employer_pf))
+        m4.metric("Gratuity", _inr(gratuity))
+        m5.metric("Gross taxable", _inr(gross_taxable))
+
+        # --- Section 2: Old-regime deductions ---
+        st.subheader("Old-regime deductions")
+        st.caption(
+            "Optional. Leave blank if you are not claiming deductions, for example "
+            "if you expect the new regime."
+        )
+        left, right = st.columns(2)
+        with left:
+            other_80c = st.number_input(
+                "Other 80C (PPF / ELSS / LIC)", value=0, step=5_000,
+                help="Other 80C investments such as PPF, ELSS or LIC (Section 123).")
+            d_ccd1b = st.number_input(
+                "80CCD(1B) NPS", value=0, step=5_000,
+                help="Additional NPS contribution. Capped at 50,000.")
+            emp_nps = st.number_input(
+                "Employer NPS / 80CCD(2)", value=0, step=5_000,
+                help="Employer's NPS contribution (Section 124). Allowed under both regimes.")
+            pt = st.number_input(
+                "Professional tax", value=2_400, step=100,
+                help="Professional tax deducted by your employer during the year.")
+        with right:
+            d_80d_self = st.number_input(
+                "80D self & family", value=0, step=1_000,
+                help="Health insurance premium for self and family. Capped at 25,000.")
+            d_80d_par = st.number_input(
+                "80D parents", value=0, step=1_000,
+                help="Health insurance premium for parents. Capped at 50,000.")
+            d_24b = st.number_input(
+                "Sec 24(b) home-loan interest", value=0, step=10_000,
+                help="Interest on a self-occupied home loan. Capped at 2,00,000.")
+            d_80e = st.number_input(
+                "80E education-loan interest", value=0, step=5_000,
+                help="Interest paid on an education loan. No upper limit.")
+
+        # --- Section 3: Your details ---
+        st.subheader("Your details")
+        name_input = st.text_input(
+            "Name", value="", placeholder="Your name",
+            help="Used to label the downloadable PDF report.")
+        st.info(
+            "These details are used only to compute and label your comparison. "
+            "Old-regime deductions apply only when you choose the old regime; "
+            "the new regime ignores them. Nothing is saved after you close the app."
         )
 
-        # --- Tab 1: Salary structure ---
-        with tab_salary:
-            left, right = st.columns(2)
-            with left:
-                gross_ctc = st.number_input(
-                    "Gross CTC", value=15_00_000, step=10_000, min_value=1_00_000,
-                    help="Total cost to company for the year, before any deductions.")
-                basic = st.number_input(
-                    "Basic salary", value=int(gross_ctc * 0.45), step=5_000,
-                    help="Annual basic pay. Drives PF, gratuity and the HRA exemption.")
-                hra_comp = st.number_input(
-                    "HRA component", value=int(basic * 0.50), step=5_000,
-                    help="House rent allowance shown in your salary structure (annual).")
-                metro = st.checkbox(
-                    "Metro city?", value=True,
-                    help="Tick if you live in a metro. 50% of basic is used for the "
-                         "HRA exemption, otherwise 40%.")
-            with right:
-                employer_pf = st.number_input(
-                    "Employer PF (annual)", value=21_600, step=1_000,
-                    help="Employer's provident fund contribution for the year.")
-                gratuity = st.number_input(
-                    "Gratuity provision (annual)", value=int(basic * 0.0481), step=1_000,
-                    help="Gratuity set aside by your employer this year.")
-                rent_paid = st.number_input(
-                    "Rent paid (annual)", value=0, step=5_000,
-                    help="Total rent paid for the year. Enter 0 if you are not claiming HRA.")
-
-        # --- Tab 2: Old-regime deductions ---
-        with tab_deductions:
-            left, right = st.columns(2)
-            with left:
-                emp_pf = st.number_input(
-                    "Employee PF", value=21_600, step=1_000,
-                    help="Your provident fund contribution. Counts towards the 80C pool (Section 123).")
-                other_80c = st.number_input(
-                    "Other 80C (PPF / ELSS / LIC)", value=0, step=5_000,
-                    help="Other 80C investments such as PPF, ELSS or LIC (Section 123).")
-                d_ccd1b = st.number_input(
-                    "80CCD(1B) NPS", value=0, step=5_000,
-                    help="Additional NPS contribution. Capped at 50,000.")
-                emp_nps = st.number_input(
-                    "Employer NPS / 80CCD(2)", value=0, step=5_000,
-                    help="Employer's NPS contribution (Section 124). Allowed under both regimes.")
-            with right:
-                d_80d_self = st.number_input(
-                    "80D self & family", value=0, step=1_000,
-                    help="Health insurance premium for self and family. Capped at 25,000.")
-                d_80d_par = st.number_input(
-                    "80D parents", value=0, step=1_000,
-                    help="Health insurance premium for parents. Capped at 50,000.")
-                d_24b = st.number_input(
-                    "Sec 24(b) home-loan interest", value=0, step=10_000,
-                    help="Interest on a self-occupied home loan. Capped at 2,00,000.")
-                d_80e = st.number_input(
-                    "80E education-loan interest", value=0, step=5_000,
-                    help="Interest paid on an education loan. No upper limit.")
-                pt = st.number_input(
-                    "Professional tax", value=2_400, step=100,
-                    help="Professional tax deducted by your employer during the year.")
-
-        # --- Tab 3: Your details ---
-        with tab_details:
-            left, right = st.columns(2)
-            with left:
-                name_input = st.text_input(
-                    "Name", value="", placeholder="Your name",
-                    help="Used to label the downloadable PDF report.")
-            with right:
-                st.info(
-                    "These details are used only to compute and label your comparison. "
-                    "Old-regime deductions apply only when you choose the old regime; "
-                    "the new regime ignores them. Nothing is saved after you close the app."
-                )
-
-        # Single submit button — inside the form but outside the tabs, so it
-        # stays visible whichever tab is active.
+        # Single submit button at the very bottom.
         submitted = st.form_submit_button(
             "Compute comparison", type="primary", use_container_width=True
         )
@@ -350,12 +378,22 @@ else:
 # ---------------------------------------------------------------------------
 if params is None:
     if mode == MODE_MANUAL:
-        st.info("Fill in the tabs above and press **Compute comparison** to see your result.")
+        st.info("Fill in the sections above and press **Compute comparison** to see your result.")
     else:
         st.info("Select an input mode and fill in the details to see your comparison.")
     st.stop()
 
 result: TaxResult = compute(params)
+
+# Informational check (manual mode): declared old-regime deductions cannot
+# exceed taxable salary. The engine floors taxable income at zero, so this is
+# a heads-up, not a hard block.
+if mode == MODE_MANUAL and result.old.total_deductions > result.old.gross_income:
+    st.warning(
+        f"Your declared deductions ({_inr(result.old.total_deductions)}) exceed "
+        f"your taxable salary ({_inr(result.old.gross_income)}). Taxable income "
+        f"is floored at zero."
+    )
 
 # --- Winner banner ---
 winner_labels = {
@@ -415,78 +453,60 @@ _regime_card(col_old, result.old, result.winner == "old")
 _regime_card(col_new, result.new, result.winner == "new")
 
 # ---------------------------------------------------------------------------
-# Breakeven chart
+# Deduction-sweep chart
 # ---------------------------------------------------------------------------
-st.subheader("Breakeven analysis")
+st.subheader("How much deduction do you need?")
 st.caption(
-    "How total tax changes with gross CTC. The sweep holds this person's "
-    "deductions and rent fixed at their actual rupee values while only the "
-    "salary structure (basic, HRA, employer PF and gratuity) scales with CTC — "
-    "so the curve shows a clean, slab-driven breakeven rather than a runaway "
-    "HRA exemption."
+    "This holds your salary structure fixed and varies the deductions you "
+    "claim. The new regime ignores most deductions, so its line is flat. The "
+    "old regime falls as you claim more. Where they cross is the deduction "
+    "level at which the old regime becomes cheaper for you."
 )
 
-# Build a CTC range around the current value, then sweep with deductions held
-# fixed (see breakeven.py for why fixing rent + deductions removes the spurious
-# old-regime advantage at high CTC).
-base_ctc = params.gross_ctc
-ctc_min  = max(3_00_000, int(base_ctc * 0.5))
-ctc_max  = int(base_ctc * 2.0)
-step_size = max(50_000, int((ctc_max - ctc_min) / 50))
-
-sweep = build_sweep(params, ctc_min, ctc_max, step_size)
-ctc_range = sweep.ctcs
+# Sweep the claimed old-regime deductions (salary structure held fixed).
+sweep = build_sweep(params)
+ded_range = sweep.ded_levels
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(
-    x=[c / 1_00_000 for c in ctc_range], y=[t / 1_00_000 for t in sweep.old_taxes],
+    x=[d / 1_00_000 for d in ded_range], y=[t / 1_00_000 for t in sweep.old_taxes],
     name="Old Regime", mode="lines",
     line=dict(color="#F4C9B6", width=2),
 ))
 fig.add_trace(go.Scatter(
-    x=[c / 1_00_000 for c in ctc_range], y=[t / 1_00_000 for t in sweep.new_taxes],
+    x=[d / 1_00_000 for d in ded_range], y=[t / 1_00_000 for t in sweep.new_taxes],
     name="New Regime", mode="lines",
     line=dict(color="#4DBBAE", width=2),
 ))
-# Mark current employee position
+# Mark the person's current claimed deductions.
 fig.add_vline(
-    x=base_ctc / 1_00_000,
+    x=sweep.current_ded / 1_00_000,
     line_dash="dot", line_color="#2A8676", line_width=1.5,
-    annotation_text=f"Current CTC ({_inr(base_ctc)})",
+    annotation_text=f"Current deductions ({_inr(sweep.current_ded)})",
     annotation_position="top right",
     annotation_font_size=10,
 )
-# Annotate the crossover, if the regimes actually swap within the range.
-if sweep.crossover_ctc is not None:
+# Annotate the crossover, if the old regime overtakes the new within range.
+if sweep.breakeven_ded is not None:
     fig.add_trace(go.Scatter(
-        x=[sweep.crossover_ctc / 1_00_000], y=[sweep.crossover_tax / 1_00_000],
+        x=[sweep.breakeven_ded / 1_00_000], y=[sweep.breakeven_tax / 1_00_000],
         name="Breakeven", mode="markers",
         marker=dict(color="#2A8676", size=10, symbol="circle-open", line=dict(width=2)),
-        hovertemplate=f"Breakeven ~{_inr(sweep.crossover_ctc)}<extra></extra>",
+        hovertemplate=f"Breakeven ~{_inr(sweep.breakeven_ded)}<extra></extra>",
         showlegend=False,
     ))
     fig.add_annotation(
-        x=sweep.crossover_ctc / 1_00_000, y=sweep.crossover_tax / 1_00_000,
-        text=f"Breakeven ~{_inr(sweep.crossover_ctc)}",
+        x=sweep.breakeven_ded / 1_00_000, y=sweep.breakeven_tax / 1_00_000,
+        text=f"Breakeven ~{_inr(sweep.breakeven_ded)}",
         showarrow=True, arrowhead=2, arrowcolor="#2A8676",
         ax=0, ay=-34, font=dict(size=10, color="#2A8676"),
-    )
-    st.caption(
-        f"At this person's fixed deductions, the regimes break even around a "
-        f"gross CTC of **{_inr(sweep.crossover_ctc)}**. Below it one regime wins; "
-        f"above it the other does."
-    )
-else:
-    st.caption(
-        "Across this CTC range the same regime stays cheaper throughout — the "
-        "lines do not cross."
     )
 
 fig.update_layout(
     font=dict(family="Tahoma, Verdana, sans-serif", color="#2E3A36", size=12),
     plot_bgcolor="#F8F6EF",
     paper_bgcolor="#F8F6EF",
-    xaxis=dict(title="Gross CTC (Rs Lakhs)", gridcolor="#D6DBD7", linecolor="#6B7570"),
+    xaxis=dict(title="Deductions claimed (Rs Lakhs)", gridcolor="#D6DBD7", linecolor="#6B7570"),
     yaxis=dict(title="Total Tax (Rs Lakhs)", gridcolor="#D6DBD7", linecolor="#6B7570"),
     legend=dict(bgcolor="#F8F6EF", bordercolor="#D6DBD7"),
     margin=dict(l=60, r=30, t=40, b=50),
@@ -494,15 +514,30 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
+if sweep.breakeven_ded is not None:
+    st.caption(
+        f"At your salary structure, the old regime becomes cheaper once you "
+        f"claim about **{_inr(sweep.breakeven_ded)}** in deductions."
+    )
+else:
+    st.caption(
+        "Across this deduction range the new regime stays cheaper throughout — "
+        "the lines do not cross."
+    )
+
 # ---------------------------------------------------------------------------
 # PDF export
 # ---------------------------------------------------------------------------
 st.subheader("Export PDF advisory")
 
+# Render a static matplotlib copy of the deduction-sweep chart for the PDF.
+chart_png = render_sweep_chart_png(sweep)
+
 pdf_bytes = generate_pdf(
     result=result,
     employee_name=employee_name,
     gross_ctc=params.gross_ctc,
+    chart_png=chart_png,
 )
 
 st.download_button(
