@@ -170,8 +170,9 @@ with st.expander("About this prototype", expanded=True):
     )
     st.markdown(
         "The salary structure is synthetic. It models the pay structure of a fictional "
-        "IT company. A real CTC usually has components this demo does not cover, such as "
-        "reimbursable allowances and meal allowance. So entering your gross "
+        "IT company. A real CTC usually has more tax-saving components (like Meal "
+        "Allowance) and allows for more IT deductions (like LTA and Section 153, "
+        "formerly 80TTA) that this demo does not cover. So entering your gross "
         "CTC will not reproduce your actual break-up, and the tax will not match either."
     )
     st.markdown(
