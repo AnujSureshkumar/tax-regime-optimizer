@@ -273,8 +273,12 @@ else:
                      "HRA exemption, otherwise 40%.")
         with right:
             rent_paid = st.number_input(
-                "Rent paid (annual)", value=0, step=5_000,
+                "Rent paid (per year)", value=0, step=5_000,
                 help="Total rent paid for the year. Enter 0 if you are not claiming HRA.")
+            st.caption(
+                "Enter the full year's rent. HRA is exempt only to the extent "
+                "rent exceeds 10% of basic."
+            )
 
         # Derive the salary structure from CTC (same formulas as the generator).
         comp = _derive_components(gross_ctc)
@@ -289,12 +293,32 @@ else:
             "Components are derived from CTC using the demo company's standard "
             "salary structure."
         )
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Basic", _inr(basic))
-        m2.metric("HRA component", _inr(hra_comp))
-        m3.metric("Employer PF", _inr(employer_pf))
-        m4.metric("Gratuity", _inr(gratuity))
-        m5.metric("Gross taxable", _inr(gross_taxable))
+        # One compact, quiet read-only summary on Sea Green Wash (replaces the
+        # five heavy st.metric cards). Muted, small, single bordered row.
+        _comp_cell = (
+            "<td style='padding:5px 10px;border-right:1px solid #B5E2D9;'>"
+            "<div style='font-size:0.68rem;color:#6B7570;'>{label}</div>"
+            "<div style='font-size:0.85rem;color:#2E3A36;font-weight:bold;'>{value}</div>"
+            "</td>"
+        )
+        _comp_last = (
+            "<td style='padding:5px 10px;'>"
+            "<div style='font-size:0.68rem;color:#6B7570;'>{label}</div>"
+            "<div style='font-size:0.85rem;color:#2E3A36;font-weight:bold;'>{value}</div>"
+            "</td>"
+        )
+        st.markdown(
+            "<table style='width:100%;border-collapse:collapse;background:#E1EFEC;"
+            "border:1px solid #B5E2D9;border-radius:4px;margin:4px 0 6px 0;'>"
+            "<tr>"
+            + _comp_cell.format(label="Basic", value=_inr(basic))
+            + _comp_cell.format(label="HRA component", value=_inr(hra_comp))
+            + _comp_cell.format(label="Employer PF", value=_inr(employer_pf))
+            + _comp_cell.format(label="Gratuity", value=_inr(gratuity))
+            + _comp_last.format(label="Gross taxable", value=_inr(gross_taxable))
+            + "</tr></table>",
+            unsafe_allow_html=True,
+        )
 
         # --- Section 2: Old-regime deductions ---
         st.subheader("Old-regime deductions")
@@ -452,18 +476,65 @@ def _regime_card(col, r, is_winner: bool) -> None:
 _regime_card(col_old, result.old, result.winner == "old")
 _regime_card(col_new, result.new, result.winner == "new")
 
+# --- HRA exemption working (manual mode, whenever an HRA component exists) ---
+# Always show the three-leg working under Sec 14(10) so a zero exemption is
+# never silent. Covers all three zero cases: rent 0, rent below 10% of basic,
+# or no HRA component.
+if mode == MODE_MANUAL and params.hra_component > 0:
+    leg_a = params.hra_component
+    city_pct = 0.50 if params.metro else 0.40
+    leg_b = params.basic * city_pct
+    leg_c = max(0.0, params.rent_paid - 0.10 * params.basic)
+    granted = result.old.deductions.get("Sec 14(10) — HRA exemption", 0.0)
+    city_label = "50% of basic (metro)" if params.metro else "40% of basic (non-metro)"
+
+    # Note on leg (c) when rent does not exceed 10% of basic (floored at 0).
+    ten_pct_basic = 0.10 * params.basic
+    leg_c_note = ""
+    if params.rent_paid <= ten_pct_basic:
+        leg_c_note = (
+            f"  (rent {_inr(params.rent_paid)} is below 10% of basic "
+            f"{_inr(ten_pct_basic)})"
+        )
+
+    with st.expander("HRA exemption (Sec 14(10))", expanded=False):
+        st.markdown(
+            f"<span style='color:#6B7570'>HRA component:</span> "
+            f"**{_inr(leg_a)}**", unsafe_allow_html=True)
+        st.markdown(
+            f"<span style='color:#6B7570'>{city_label}:</span> "
+            f"**{_inr(leg_b)}**", unsafe_allow_html=True)
+        st.markdown(
+            f"<span style='color:#6B7570'>Rent − 10% of basic:</span> "
+            f"**{_inr(leg_c)}**{leg_c_note}", unsafe_allow_html=True)
+        st.markdown(
+            f"**HRA exemption granted (least of the three): {_inr(granted)}**")
+
+        if granted == 0:
+            if params.rent_paid == 0:
+                reason = "No HRA exemption: you entered Rs 0 rent."
+            else:
+                reason = (
+                    f"No HRA exemption: your rent ({_inr(params.rent_paid)}) does "
+                    f"not exceed 10% of basic ({_inr(ten_pct_basic)})."
+                )
+            st.markdown(
+                f"<span style='color:#6B7570;font-size:0.85rem'>{reason}</span>",
+                unsafe_allow_html=True,
+            )
+
 # ---------------------------------------------------------------------------
 # Deduction-sweep chart
 # ---------------------------------------------------------------------------
 st.subheader("How much deduction do you need?")
 st.caption(
-    "This holds your salary structure fixed and varies the deductions you "
-    "claim. The new regime ignores most deductions, so its line is flat. The "
-    "old regime falls as you claim more. Where they cross is the deduction "
-    "level at which the old regime becomes cheaper for you."
+    "This holds your salary fixed and varies your total old-regime deductions. "
+    "The new regime ignores them, so its line is flat. The old regime falls as "
+    "your total deductions rise. Where they cross is the total deduction at "
+    "which the old regime becomes cheaper."
 )
 
-# Sweep the claimed old-regime deductions (salary structure held fixed).
+# Sweep the TOTAL old-regime deduction (salary structure held fixed).
 sweep = build_sweep(params)
 ded_range = sweep.ded_levels
 
@@ -482,7 +553,7 @@ fig.add_trace(go.Scatter(
 fig.add_vline(
     x=sweep.current_ded / 1_00_000,
     line_dash="dot", line_color="#2A8676", line_width=1.5,
-    annotation_text=f"Current deductions ({_inr(sweep.current_ded)})",
+    annotation_text=f"Current total deductions ({_inr(sweep.current_ded)})",
     annotation_position="top right",
     annotation_font_size=10,
 )
@@ -506,7 +577,7 @@ fig.update_layout(
     font=dict(family="Tahoma, Verdana, sans-serif", color="#2E3A36", size=12),
     plot_bgcolor="#F8F6EF",
     paper_bgcolor="#F8F6EF",
-    xaxis=dict(title="Deductions claimed (Rs Lakhs)", gridcolor="#D6DBD7", linecolor="#6B7570"),
+    xaxis=dict(title="Total deductions claimed (old regime) (Rs Lakhs)", gridcolor="#D6DBD7", linecolor="#6B7570"),
     yaxis=dict(title="Total Tax (Rs Lakhs)", gridcolor="#D6DBD7", linecolor="#6B7570"),
     legend=dict(bgcolor="#F8F6EF", bordercolor="#D6DBD7"),
     margin=dict(l=60, r=30, t=40, b=50),
@@ -516,13 +587,12 @@ st.plotly_chart(fig, use_container_width=True)
 
 if sweep.breakeven_ded is not None:
     st.caption(
-        f"At your salary structure, the old regime becomes cheaper once you "
-        f"claim about **{_inr(sweep.breakeven_ded)}** in deductions."
+        f"At your salary, the old regime becomes cheaper once your total "
+        f"deductions exceed about **{_inr(sweep.breakeven_ded)}**."
     )
 else:
     st.caption(
-        "Across this deduction range the new regime stays cheaper throughout — "
-        "the lines do not cross."
+        "Across this range the same regime stays cheaper throughout."
     )
 
 # ---------------------------------------------------------------------------

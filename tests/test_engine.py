@@ -165,6 +165,49 @@ class TestHRAExemption:
         assert ex == 0
 
 
+class TestHRAExemptionThreeLeg:
+    """
+    Regression lock for the three-leg Sec 14(10) rule as it surfaces in the
+    app's manual mode (Round-2 BUG 2). A manual-style person with CTC 20L has a
+    derived basic of 9L and HRA component of 4.5L (50% of basic, metro). The
+    granted exemption is the LEAST of the three legs and must be:
+      - non-zero (and equal to the least leg) when rent clearly exceeds 10% basic;
+      - zero when rent is below 10% of basic (leg (c) floors at 0);
+      - zero when rent is 0.
+    """
+
+    HRA_KEY = "Sec 14(10) — HRA exemption"
+
+    def _manual_person(self, rent: float) -> TaxParams:
+        # CTC 20L -> basic 9L, HRA component 4.5L (metro, 50% of basic).
+        return _basic_params(
+            gross_ctc=20_00_000, basic=9_00_000, hra_component=4_50_000,
+            rent_paid=rent, metro=True,
+        )
+
+    def test_rent_above_10pct_basic_grants_least_leg(self):
+        # Rent 4,80,000: leg(c) = 4,80,000 - 90,000 = 3,90,000.
+        # Legs: (a) 4,50,000, (b) 50% of 9L = 4,50,000, (c) 3,90,000 -> least 3,90,000.
+        p = self._manual_person(4_80_000)
+        ded = _old_regime_deductions(p)
+        assert ded[self.HRA_KEY] == 3_90_000
+        # And it equals the explicit least-of-three legs.
+        legs = (p.hra_component, 0.50 * p.basic, max(0.0, p.rent_paid - 0.10 * p.basic))
+        assert ded[self.HRA_KEY] == min(legs)
+        assert ded[self.HRA_KEY] > 0
+
+    def test_rent_below_10pct_basic_grants_zero(self):
+        # The exact case the tester hit: basic 9L, rent 40,000 < 90,000.
+        p = self._manual_person(40_000)
+        ded = _old_regime_deductions(p)
+        assert ded[self.HRA_KEY] == 0
+
+    def test_zero_rent_grants_zero(self):
+        p = self._manual_person(0)
+        ded = _old_regime_deductions(p)
+        assert ded[self.HRA_KEY] == 0
+
+
 # ---------------------------------------------------------------------------
 # Tax slab tests
 # ---------------------------------------------------------------------------
